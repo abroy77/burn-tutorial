@@ -1,10 +1,6 @@
 use burn::{
-    data::{
-        dataloader::batcher::Batcher,
-        dataset::vision::{ImageDatasetItem, MnistItem},
-    },
+    data::{dataloader::batcher::Batcher, dataset::vision::MnistItem},
     prelude::*,
-    train::metric::ItemLazy,
 };
 
 #[derive(Clone, Default)]

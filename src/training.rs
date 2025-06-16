@@ -1,10 +1,18 @@
+use crate::{
+    data::{MnistBatch, MnistBatcher},
+    model::{Model, ModelConfig},
+};
 use burn::{
-    backend::Autodiff,
-    nn::loss::{CrossEntropyLoss, CrossEntropyLossConfig},
+    data::{dataloader::DataLoaderBuilder, dataset::vision::MnistDataset},
+    nn::loss::CrossEntropyLossConfig,
     optim::AdamConfig,
     prelude::*,
+    record::CompactRecorder,
     tensor::{Int, Tensor, backend::AutodiffBackend},
-    train::{ClassificationOutput, TrainOutput, TrainStep, ValidStep},
+    train::{
+        ClassificationOutput, LearnerBuilder, TrainOutput, TrainStep, ValidStep,
+        metric::{AccuracyMetric, LossMetric},
+    },
 };
 
 #[derive(Config)]
@@ -18,15 +26,10 @@ pub struct TrainingConfig {
     #[config(default = 4)]
     pub num_workers: usize,
     #[config(default = 42)]
-    pub seed: usize,
+    pub seed: u64,
     #[config(default = 1.0e-4)]
     pub learning_rate: f64,
 }
-
-use crate::{
-    data::MnistBatch,
-    model::{Model, ModelConfig},
-};
 
 impl<B: Backend> Model<B> {
     pub fn forward_classification(
@@ -66,5 +69,47 @@ pub fn train<B: AutodiffBackend>(artifact_dir: &str, config: TrainingConfig, dev
 
     config
         .save(format!("{artifact_dir}/config.json"))
-        .expect("Config should have been saved successfully")
+        .expect("Config should have been saved successfully");
+
+    B::seed(config.seed);
+
+    let batcher = MnistBatcher::default();
+
+    let dataloader_train = DataLoaderBuilder::new(batcher.clone())
+        .batch_size(config.batch_size)
+        .shuffle(config.seed)
+        .num_workers(config.num_workers)
+        .build(MnistDataset::train());
+
+    let dataloader_test = DataLoaderBuilder::new(batcher)
+        .batch_size(config.batch_size)
+        .shuffle(config.seed)
+        .num_workers(config.num_workers)
+        .build(MnistDataset::test());
+    // let dataloader_test = DataLoaderBuilder::<B, _, _>::new(batcher.clone())
+    //     .batch_size(config.batch_size)
+    //     .shuffle(config.seed)
+    //     .num_workers(config.num_workers)
+    //     .build(MnistDataset::test());
+
+    let learner = LearnerBuilder::new(artifact_dir)
+        .metric_train_numeric(AccuracyMetric::new())
+        .metric_valid_numeric(AccuracyMetric::new())
+        .metric_train_numeric(LossMetric::new())
+        .metric_valid_numeric(LossMetric::new())
+        .with_file_checkpointer(CompactRecorder::new())
+        .devices(vec![device.clone()])
+        .num_epochs(config.num_epochs)
+        .summary()
+        .build(
+            config.model.init::<B>(&device),
+            config.optimizer.init(),
+            config.learning_rate,
+        );
+
+    let model_trained = learner.fit(dataloader_train, dataloader_test);
+
+    model_trained
+        .save_file(format!("{artifact_dir}/model"), &CompactRecorder::new())
+        .expect("Trained model should be saved successfully");
 }
